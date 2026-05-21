@@ -1,4 +1,4 @@
-# Drought Severity Prediction
+# Drought Severity Prediction (改短一點 比較適合 github readme)
 
 **Project:** NYCU Data Mining Spring 2026 Final Project — Natural Disaster Severity Prediction (Drought)
 **Task:** Predict weekly drought severity scores (0–5) for the 5 weeks following each region's 91-day weather window
