@@ -184,7 +184,7 @@ comma-separated seed list, so the same script produces a single-seed sanity chec
 
 ---
 
-## Reproducing
+## Reproducing (See **FinalProject.ipynb**)
 
 All neural models share the data pipeline and a common training interface. Example —
 training the 10-seed TCN that anchors the best ensemble:
