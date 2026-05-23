@@ -174,6 +174,7 @@ complementary structure.
 ├── baseline_v10_tcn_static_5seed_avg.py# V10  — multi-seed trainer
 ├── baseline_dlinear_5seed_avg.py    # DLinear — multi-seed trainer
 ├── ensemble/                        # ensemble blending scripts
+├── FinalProject.ipynb               # For experiment reproducing
 └── README.md
 ```
 
