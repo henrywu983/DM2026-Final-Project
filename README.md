@@ -187,13 +187,13 @@ comma-separated seed list, so the same script produces a single-seed sanity chec
 ## Reproducing (See **FinalProject.ipynb**)
 
 All neural models share the data pipeline and a common training interface. Example —
-training the 10-seed TCN that anchors the best ensemble:
+training the 5-seed TCN that anchors the best ensemble:
 
 ```bash
 python baseline_v7_tcn_5seed_avg.py \
     --base /path/to/data-mining-2026-final-project \
-    --seeds 42,43,44,45,46,47,48,49,50,51 \
-    --out baseline_v7_tcn_10seed_avg.csv
+    --seeds 42,43,44,45,46 \
+    --out baseline_v7_tcn_5seed_avg.csv
 ```
 
 A single-seed sanity check before committing to a full run:
