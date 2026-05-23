@@ -171,13 +171,13 @@ complementary structure.
 ├── baseline_v8_pslstm.py            # V8   — P-sLSTM
 ├── baseline_v9_itransformer.py      # V9   — iTransformer
 ├── baseline_v10_tcn_static.py       # V10  — TCN + static features
-├── baseline_v10_tcn_static_5seed_avg.py # V10  — multi-seed trainer
+├── baseline_v10_tcn_static_5seed_avg.py# V10  — multi-seed trainer
 ├── baseline_dlinear_5seed_avg.py    # DLinear — multi-seed trainer
-├── ensemble_*.py                    # ensemble blending scripts
+├── ensemble/                        # ensemble blending scripts
 └── README.md
 ```
 
-The multi-seed trainers (`*_5seed_avg.py`, `run_v10_5seeds.py`) take a configurable
+The multi-seed trainers (`*_5seed_avg.py`) take a configurable
 comma-separated seed list, so the same script produces a single-seed sanity check, a
 5-seed average, or a 10-seed average.
 
