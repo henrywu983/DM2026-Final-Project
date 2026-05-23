@@ -1,246 +1,295 @@
-# Drought Severity Prediction (改短一點 比較適合 github readme)
+# Drought Severity Prediction
 
-**Project:** NYCU Data Mining Spring 2026 Final Project — Natural Disaster Severity Prediction (Drought)
-**Task:** Predict weekly drought severity scores (0–5) for the 5 weeks following each region's 91-day weather window
-**Metric:** Mean Absolute Error (MAE), lower is better
-**Evaluation:** Public LB on 40% of test data; Private LB on remaining 60% (hidden)
-**Updated:** May 19, 2026
+**NYCU Data Mining, Spring 2026 — Final Project (Natural Disaster Severity Prediction)**
+
+Predict weekly drought severity scores (0–5) for the five weeks following each region's
+91-day weather observation window. Evaluation metric is **Mean Absolute Error (MAE)**;
+lower is better. The public leaderboard scores 40% of the test set, the private
+leaderboard the remaining 60%.
 
 ---
 
-## Current Standing
+## Result
 
-| Bracket | Threshold | Points |
+| | |
+|---|---|
+| **Best public LB** | **0.7942** |
+| Best model | 3-way ensemble — V5 (LightGBM) + V7-10seed (TCN) + V10-5seed (TCN + static) |
+| Weights | 0.10 / 0.50 / 0.40 |
+| Margin over Baseline 3 (0.8056) | 0.0114 |
+
+The two submissions auto-selected for private-LB scoring are the (0.10/0.50/0.40)
+blend at 0.7942 and the (0.15/0.45/0.40) blend at 0.7944. Both share the identical
+architectural shape and differ only in the V5/V7 weight split, which gives a stable
+private-LB safety profile.
+
+| Bracket | Threshold | Status |
 |---|---|---|
-| Above Baseline 3 | LB < 0.8056 | 42–60 |
-| Between Baselines 2 & 3 | 0.8056 ≤ LB < 0.8623 | 25–40 |
-| Between Baselines 1 & 2 | 0.8623 ≤ LB < 0.9117 | 10–25 |
-| Under Baseline 1 | LB ≥ 0.9117 | 5 |
-
-**Best confirmed LB: ensemble_3way V5 + V7-10seed + V10-5seed at weights (0.10 / 0.50 / 0.40) = 0.7942** — clears Baseline 3 (0.8056) by 0.0114. Estimated points: 42–60 for Kaggle portion, exact placement depends on rank.
-
-**Top two public-LB submissions (Kaggle auto-pick for final):**
-1. (0.10 / 0.50 / 0.40) V5 / V7-10 / V10-5 → 0.7942
-2. (0.15 / 0.45 / 0.40) V5 / V7-10 / V10-5 → 0.7944
-
-Both share the same architectural shape — robust safety profile for private LB.
+| Above Baseline 3 | LB < 0.8056 | **cleared (0.7942)** |
+| Baselines 2–3 | 0.8056 ≤ LB < 0.8623 | — |
+| Baselines 1–2 | 0.8623 ≤ LB < 0.9117 | — |
+| Below Baseline 1 | LB ≥ 0.9117 | — |
 
 ---
 
-## Data Summary
+## Data
 
-- **Train:** 12,319,040 rows × 21 columns (2,248 regions × 5,480 days each)
-- **Test:** 204,568 rows × 20 columns (2,248 regions × 91 days each, no `score` column)
-- **Submission:** 2,248 rows × 6 columns
-- **Score distribution (training):** 60% zeros, mean 0.836, median 0
-- **Scores recorded weekly** on `day_idx % 7 == 6`
-- **No missing weather features** in either train or test
-- **Anonymized far-future dates** (years 3000+) — handled via string slicing + per-region day indices
+- **Train:** 12.3M rows (2,248 regions × 5,480 days), 14 weather features + weekly `score`
+- **Test:** 204k rows (2,248 regions × 91 days), no `score` column
+- **Submission:** 2,248 rows × 6 columns (`region_id`, `pred_week1..5`)
+- **Score distribution:** ~60% zeros, mean 0.836, median 0 — heavily zero-inflated
+- Scores are recorded weekly (`day_idx % 7 == 6`); no missing weather values
+- Dates are anonymized to far-future years and handled via per-region day indices
+
+The 14 weather features are `prec`, `surf_pre`, `humidity`, `tmp`, `dp_tmp`, `wb_tmp`,
+`tmp_max`, `tmp_min`, `tmp_range`, `surf_tmp`, `wind`, `wind_max`, `wind_min`,
+`wind_range` — and they are strongly inter-correlated (temperature group, wind group,
+humidity ↔ temperature). That correlation structure turns out to drive several of the
+key findings below.
 
 ---
 
-## Submission History (Chronological)
+## Approach
 
-| # | Model | Public LB | Notes |
+The final model is a hand-weighted ensemble of three models from different
+architecture families:
+
+1. **V5 — LightGBM.** 105 engineered features including climatology anomalies and
+   score history. Best tree-based model; standalone LB 0.9017.
+2. **V7 — Temporal Convolutional Network.** 5 dilated residual blocks × 64 channels,
+   averaged over 10 random seeds. The strongest single model.
+3. **V10 — TCN + static features.** A TCN backbone fused with V5's static features,
+   averaged over 5 seeds. Used as a diversifier.
+
+All neural models share one pipeline (`data_pipeline_nn.py`): 91-day input windows,
+five weekly targets at day offsets [7, 14, 21, 28, 35], and per-region z-score
+normalization (RevIN-style) so the network sees deviations from each region's own
+climate rather than raw weather values. Training uses AdamW + cosine LR, L1 loss
+(matching the MAE metric), gradient clipping, and best-validation checkpointing.
+Each model is trained from several random seeds and the raw test predictions are
+averaged, then clipped to [0, 5].
+
+Ensemble weights are tuned against leaderboard feedback rather than the validation
+set — see Finding 7 for why.
+
+---
+
+## Model Catalog
+
+### Tabular / lookup-based
+
+| Model | Description | Val MAE | LB |
 |---|---|---|---|
-| 1 | V1 — monthly mean lookup | 0.9506 | Established baseline |
-| 2 | V1.5 — monthly median | 1.0271 | Median over-confident on hard cases |
-| 3 | V2 — minimal LGBM | 0.9435 | Validation was leaky |
-| 4 | V3 — LGBM with engineered features | 0.9168 | Honest buffered validation |
-| 5 | V3 calibrated (blend=0.50) | 0.9673 | Quantile mapping hurt — ranking was the bottleneck |
-| 6 | V5 — LGBM with climatology + score history | 0.9017 | First model above Baseline 1 |
-| 7 | Ensemble V3 + V5 + V6 | 0.9035 | High pairwise correlation; ensembling didn't help |
-| 8 | V7 — TCN | **0.8463** | Cleared Baseline 2; first sequence model |
-| 9 | Ensemble V5 + V7 (mean) | 0.8353 | Cross-architecture ensembling worked |
-| 10 | **V7 5-seed averaged** | **0.8071** | Variance reduction gave 0.039 jump |
-| 11 | Ensemble 3-way V5 + V7-5seed + V10-single (v7stronger) | 0.8062 | Tied V7-5seed; V10 single-seed added little |
-| 12 | **Ensemble 3-way V5 + V7-5seed + V10-5seed (v7stronger rebuilt)** | **0.7971** | Cleared Baseline 3 by 0.0085; V10-5seed contributed once seed-averaged |
-| 13 | V10-TCN-static 5-seed avg (standalone) | 0.8159 | Standalone benchmark for V10; weaker than V7-5seed (0.8071) but contributes in ensemble |
-| 14 | Ensemble V7-5seed + V10-5seed (60/40, no V5) | 0.7973 | Near-tie with 3-way (0.7971); V5 contributes ~0 to the ensemble |
-| 15 | Per-week unconstrained Ridge stacker (V7-5seed + V10-5seed) | 0.7991 | Val-fit weights ~0.80/0.18; worse than 60/40 by 0.0020 — val/LB inversion confirmed |
-| 16 | **Ensemble 3-way V5 + V7-10seed + V10-5seed** | **0.7948** | New best; 10-seed V7 cut another 0.0023 off LB. Seed averaging not yet at ceiling for V7. |
-| 17 | Ensemble 3-way V5 + V7-10seed + V10-10seed (0.15/0.55/0.30) | 0.7965 | V10 5→10 seed averaging *hurt* the ensemble by 0.0017. V10 has hit its variance-reduction ceiling for ensembling. |
-| 18 | Ensemble 3-way V5 + V7-10seed + V10-10seed (V7-heavy: 0.15/0.65/0.20) | 0.7969 | Tilting more weight to V7 didn't recover the loss — confirmed V10-10seed itself is the regression, not the weight balance. |
-| 19 | **Ensemble 3-way V5 + V7-10seed + V10-5seed (V10-heavier: 0.15/0.50/0.35)** | **0.7945** | Weight sweep gain: trimming V7 by 0.05 toward V10-5seed gained 0.0003 LB. Confirmed V10-5seed (not V10-10seed) is the right diversifier. |
-| 20 | **Ensemble 3-way V5 + V7-10seed + V10-5seed (more V10: 0.15/0.45/0.40)** | **0.7944** | Continuing the V10 gradient gained another 0.0001 LB. Step sizes shrinking — near plateau. |
-| 21 | **Ensemble 3-way V5 + V7-10seed + V10-5seed (V5 trimmed: 0.10/0.50/0.40)** | **0.7942** | Trimming V5 from 0.15 to 0.10 gained 0.0002 LB. Current best. |
-| 22 | Ensemble 2-way V7-10seed + V10-5seed (V5 dropped: 0/0.55/0.45) | 0.7961 | Dropping V5 entirely cost 0.0019 LB — V5 is **not** redundant at the new operating point. Reverses May 14 finding. |
+| V1 | Per-region monthly mean lookup | 0.79 | 0.9506 |
+| V1.5 | Per-region monthly median lookup | — | 1.0271 |
+| V2 | LightGBM, basic aggregates (58 feat.) | 0.524* | 0.9435 |
+| V3 | LightGBM, engineered features (90 feat.) | 0.4634 | 0.9168 |
+| **V5** | V3 + climatology anomalies + score history (105 feat.) | 0.4556 | **0.9017** |
+| V6 | V5 + recent-drought features (117 feat.) | 0.4593 | not submitted |
 
----
+\* V2 validation was leaky and not comparable.
 
-## Full Model Catalog
+### Sequence / neural architectures
 
-### Tabular / Lookup-based
+| Model | Description | Val MAE | LB |
+|---|---|---|---|
+| V7 | TCN (5 dilated blocks × 64 ch) | 0.4322 | 0.8463 |
+| **V7-5seed** | TCN averaged over seeds 42–46 | ~0.44 | **0.8071** |
+| **V7-10seed** | TCN averaged over seeds 42–51 | ~0.43 | in best ensemble |
+| V8 / V8.1 | P-sLSTM, single- and multi-head | 0.71 / 0.69 | failed |
+| V9 | iTransformer | 0.6791 | failed |
+| V10 | TCN + V5 static features fused | 0.4498 | — |
+| **V10-5seed** | V10 averaged over seeds 42–46 | ~0.456 | **0.8159** |
+| DLinear | Linear trend/seasonal decomposition | 0.6427 | not pursued |
 
-| # | Model | Val MAE | LB | Status |
-|---|---|---|---|---|
-| V1 | Per-region monthly mean | 0.79 | 0.9506 | Submitted |
-| V1.5 | Per-region monthly median | — | 1.0271 | Submitted |
-| V2 | LGBM, basic aggregates (58 features) | 0.524 (leaky) | 0.9435 | Submitted |
-| V3 | LGBM with engineered features (90 features) + buffered val | 0.4634 | 0.9168 | Submitted |
-| V3-calibrated | Quantile-mapped V3 (blend=0.5) | — | 0.9673 | Submitted (regression) |
-| V5 | V3 + climatology anomalies + score history (105 features) | 0.4556 | 0.9017 | Submitted ⭐ |
-| V6 | V5 + recent-drought features (117 features) | 0.4593 | — | Trained, not submitted |
+### Leaderboard progression
 
-### Sequence-based (NN architectures)
-
-| # | Model | Val MAE | LB | Status |
-|---|---|---|---|---|
-| V7 | TCN (5 dilated blocks × 64 ch) | 0.4322 | 0.8463 | Submitted |
-| V7.1 | TCN over-regularized | 0.4586 | — | Trained, not submitted |
-| V7-large | TCN (6 blocks × 96 ch) | 0.4658 | — | Trained, not submitted |
-| **V7 5-seed** | TCN averaged across seeds 42–46 | ~0.44 avg | **0.8071** | Submitted ⭐⭐ |
-| **V7 10-seed** | TCN averaged across seeds 42–51 | (likely ~0.43) | — | Trained; used in best ensemble (LB 0.7942) ⭐⭐⭐ |
-| V8 | P-sLSTM single-head (Kong et al. 2025) | 0.7128 | — | Trained, not submitted |
-| V8.1 | P-sLSTM multi-head | 0.6918 | — | Trained, not submitted |
-| V8.1 5-seed | V8.1 averaged across seeds 42–46 | 0.7124 avg per-seed | — | Trained, not submitted — seed averaging didn't fix structural bias |
-| V9 | iTransformer (Liu et al. 2024) | 0.6791 | — | Trained, not submitted |
-| V10 | TCN + V5 static features fused | 0.4498 | — | Trained, not submitted |
-| **V10 5-seed** | V10 averaged across seeds 42–46 | ~0.456 avg | **0.8159** | Submitted ⭐⭐ |
-| V10 10-seed | V10 averaged across seeds 42–51 | (lower variance) | — | Trained; hurt the ensemble (see row 17), not used in final picks |
-
-### Ensembles
-
-| Combination | LB | Notes |
+| Milestone | LB | Note |
 |---|---|---|
-| V3 + V5 + V6 (mean) | 0.9035 | All three tree-based, high correlation (0.91–0.98) |
-| V5 + V7-single (mean) | 0.8353 | Cross-architecture diversity (correlation 0.73) |
-| V5 + V7-5seed + V10-single (v7stronger) | 0.8062 | V10-single contributed marginally |
-| **V5 + V7-5seed + V10-5seed (v7stronger rebuilt)** | **0.7971** | First submission above Baseline 3; V10-5seed contributed once noise was stripped |
-| V7-5seed + V10-5seed (60/40, no V5) | 0.7973 | Near-tie with 3-way; V5 contributes ~0 once V10 is present |
-| Per-week unconstrained Ridge stacker (V7-5seed + V10-5seed) | 0.7991 | Val-fit weights ~0.80/0.18; lost 0.0020 LB to 60/40 — val rankings disagree with LB |
-| Per-week constrained tilt stacker (±0.15 around 60/40) | not submitted | Diagnostic showed all weeks hit +0.15 cap (uniformly V7-favoring); no per-week structure to exploit |
-| **V5 + V7-10seed + V10-5seed** (0.15/0.55/0.30) | 0.7948 | First V7-10seed ensemble — replaced V7-5seed for a 0.0023 gain |
-| V5 + V7-10seed + V10-10seed (0.15/0.55/0.30) | 0.7965 | V10 5→10 seed averaging *hurt* the ensemble (V10 hit its variance-reduction ceiling) |
-| V5 + V7-10seed + V10-10seed (V7-heavy: 0.15/0.65/0.20) | 0.7969 | Weight tilt couldn't recover V10-10seed regression |
-| V5 + V7-10seed + V10-5seed (V10-heavier: 0.15/0.50/0.35) | 0.7945 | Weight sweep direction confirmed (more V10 helps) |
-| V5 + V7-10seed + V10-5seed (more V10: 0.15/0.45/0.40) | 0.7944 | Step shrinking — near plateau |
-| **V5 + V7-10seed + V10-5seed (best: 0.10/0.50/0.40)** | **0.7942** | Current best ⭐⭐⭐ |
-| V7-10seed + V10-5seed (V5 dropped: 0/0.55/0.45) | 0.7961 | V5 *is* contributing at the new operating point (cost 0.0019 to remove) |
-
----
-
-## Failed Experiments (For Report)
-
-### Failure 1 — V1.5 monthly median
-Hypothesis: Median is MAE-optimal for skewed distributions.
-Reality: Per-region-month medians are over-confident on chronic-drought cases (LB 1.03).
-Lesson: MAE-optimal-median applies to single constant predictions, not conditional predictions on small groups.
-
-### Failure 2 — V4 in-window score features
-Hypothesis: 13 weekly scores within each 91-day window would improve predictions.
-Reality: Val 0.20 but Kaggle 1.20 — test.csv has no score column, so features were all 0 at inference.
-Lesson: Features must be computable identically at training and inference.
-
-### Failure 3 — V3 calibration
-Hypothesis: Distribution mismatch was causing the V3 LB gap.
-Reality: Quantile mapping made it worse (0.9168 → 0.9673).
-Lesson: Distribution mismatch was a symptom; ranking quality was the bottleneck.
-
-### Failure 4 — V8 / V9 sequence architectures
-Hypothesis: Sophisticated time-series architectures (sLSTM, iTransformer) would beat TCN.
-Reality: All underperformed by 0.25+ val MAE.
-Lesson: Channel independence (P-sLSTM, PatchTST) fails when channels are highly correlated. iTransformer's cross-channel attention didn't compensate — the 91-day sequence is too short for attention to extract richer signal than dilated convolution.
-
-### Failure 5 — V7-large and V7.1
-Hypothesis: V7 needed more capacity OR more regularization.
-Reality: Both directions hurt (val 0.466 and 0.459 vs V7's 0.432).
-Lesson: V7's 64ch × 5 blocks is a structural sweet spot.
-
-### Failure 6 — V6 feature stacking and V3+V5+V6 ensembling
-Hypothesis: More features and more models would compound improvements.
-Reality: V5/V6 prediction correlation was 0.978; ensemble gained nothing (0.9017 → 0.9035).
-Lesson: Diversity for ensembling must come from different inductive biases, not different features in the same model class.
-
-### Failure 7 — V10 single-seed
-Hypothesis: Fusing TCN with V5 static features inside one model would beat ensembling them.
-Reality: Val 0.4498; converged in 2 epochs with near-zero train-val gap.
-Lesson: Static features dominated training; TCN backbone contributed little additional signal.
+| V1 monthly mean | 0.9506 | first baseline |
+| V5 LightGBM | 0.9017 | best tree model |
+| V7 TCN | 0.8463 | first sequence model — biggest single jump |
+| V7-5seed | 0.8071 | seed averaging cut 0.039 |
+| 3-way (V5 + V7-5seed + V10-5seed) | 0.7971 | first submission above Baseline 3 |
+| 3-way with V7-10seed | 0.7948 | 10-seed V7 cut a further 0.0023 |
+| **3-way, tuned weights (0.10/0.50/0.40)** | **0.7942** | current best |
 
 ---
 
 ## Key Findings
 
-1. **Sequence modeling provides the biggest single jump.** TCN (V7) drove LB from 0.90 → 0.85, larger than any feature engineering iteration.
+1. **Sequence modeling delivered the biggest single jump.** Moving from LightGBM to
+   the TCN cut LB from ~0.90 to ~0.85 — larger than any feature-engineering iteration.
 
-2. **Channel independence hurts on correlated features.** Our 14 weather variables share strong dependencies. Any architecture that processes channels independently throws away joint patterns.
+2. **Channel independence hurts on correlated features.** The 14 weather variables are
+   strongly inter-dependent. Any architecture that processes channels independently
+   (P-sLSTM patching, iTransformer) discards joint patterns and underperforms.
 
-3. **Seed averaging is the highest-leverage trick, and gains continue past 5 seeds.** V7-single → V7-5seed dropped LB by 0.039 — larger than any other single intervention. V7-5seed → V7-10seed (in the 3-way ensemble) added another 0.0023. Total seed-averaging contribution for V7: ≥0.041 LB. The pattern fits 1/√N variance reduction with no plateau through 10 seeds.
+3. **Seed averaging is the highest-leverage trick, and gains continue past 5 seeds.**
+   V7-single → V7-5seed dropped LB by 0.039; V7-5seed → V7-10seed cut a further 0.0023.
+   The pattern is consistent with 1/√N variance reduction with no plateau through 10
+   seeds for V7.
 
-4. **Local-Kaggle gap is consistent ~2× for single models, but compresses with ensembling.** V5 val 0.46 → LB 0.90; V7 val 0.43 → LB 0.85; V7-5seed val ~0.44 → LB 0.81. The 3-way ensemble (V5+V7-5seed+V10-5seed) lands at LB 0.7971 — the gap is starting to bend slightly, suggesting ensembling reduces test-era distribution-shift sensitivity, not just variance.
+4. **The local-to-leaderboard gap is roughly 2× for single models and compresses with
+   ensembling.** V5: val 0.46 → LB 0.90. V7: val 0.43 → LB 0.85. The 3-way ensemble
+   lands at LB 0.797, where the gap begins to bend — ensembling appears to reduce
+   sensitivity to test-era distribution shift, not just variance.
 
-5. **Cross-architecture diversity matters more than within-architecture diversity.** V3+V5+V6 (all tree-based) correlation 0.91–0.98 → 0% ensemble gain. V5+V7 (tree vs CNN) correlation 0.73 → 0.011 gain. V7-5seed+V10-5seed (CNN vs CNN+static) correlation 0.92 → expected minimal gain.
+5. **Cross-architecture diversity matters more than within-architecture diversity.**
+   Three tree-based models (V3/V5/V6, pairwise correlation 0.91–0.98) ensembled to
+   zero gain. A tree + CNN pair (correlation 0.73) gained 0.011. Diversity must come
+   from different inductive biases, not more features in the same model class.
 
-6. **V10-5seed contribution emerged only after seed averaging.** V10-single in the 3-way ensemble produced LB 0.8062 (no gain over V7-5seed alone). The same architecture with seed averaging produced LB 0.7971 (gain of 0.010). Seed averaging on the diversifier was as important as on the main model — single-seed V10 was too noisy for its complementary signal to survive the blend.
+6. **A diversifier's contribution can require seed averaging too.** Single-seed V10
+   added nothing to the ensemble; the same architecture averaged over 5 seeds
+   contributed ~0.010 LB. The diversifier's complementary signal was buried under
+   seed noise until averaging exposed it.
 
-7. **V5's contribution is context-dependent — not "always redundant."** Earlier (May 14), dropping V5 from the 3-way blend at weights (0.15/0.55/0.30) cost only 0.0002 LB, suggesting V5 was redundant. After moving to V7-10seed and V10-5seed at weights (0.10/0.50/0.40), dropping V5 entirely cost 0.0019 LB. V5 contributes when the TCN-based components are smooth enough (V7-10seed has very low seed noise) that V5's tree-based predictions become the only genuinely orthogonal signal left. **V5's marginal value depends on what else is in the ensemble** — a more nuanced finding than "V5 is redundant" or "V5 always helps."
+7. **Validation/leaderboard inversion blocks data-driven ensemble weighting.** On the
+   validation set V7 alone beats the blend; on the leaderboard the order inverts and
+   the blend wins. Two stacking experiments confirmed this — an unconstrained Ridge
+   stacker scored 0.7991 (0.002 worse than hand-tuned weights). Validation cannot
+   serve as a proxy for the test era, so all ensemble weights are anchored to LB
+   feedback instead.
 
-8. **V8/V9 failure is structural, not statistical — seed averaging cannot recover it.** V9 (iTransformer) converged to mean predictions of 0.57–0.61 vs ~1.0 for other models (low correlation r ≈ 0.18 = bias, not orthogonal signal). V8/V8.1 (P-sLSTM) avoided V9's failure mode but had higher val MAE (0.71–0.69 vs V7's 0.43) and underprediction bias (means ~0.75 vs ~1.05). We tested whether V8.1's apparent diversity (r = 0.47 with V7-5seed) hid orthogonal signal beneath seed noise: a 5-seed averaged V8.1 yielded per-seed val MAE in 0.69–0.74 range (avg 0.7124) and seed-averaged per-week means of 0.75–0.76 — the bias survived averaging unchanged. **Variance reduction cannot fix architectural mismatch.** TCN's locality bias is the right prior for 91-day → 5-week prediction with this distribution shift; sLSTM and iTransformer's inductive biases are not.
+8. **Architecture failures are structural, not statistical — seed averaging cannot fix
+   them.** Three non-CNN families were tried and all failed, each in a different way:
 
-9. **Val/LB inversion blocks data-driven ensemble weighting.** Validation systematically under-credits V10's contribution to LB. On the val set (held-out tail of training data), V7-5seed has lower MAE (0.408) than the 60/40 blend (0.414), and V10-5seed alone is worst (0.433). On LB, the order inverts: 60/40 blend (0.7971) beats V7-5seed (0.8071), with V10-5seed alone weakest (0.8159). Two stacking experiments confirmed this: (a) unconstrained per-week Ridge picked weights ≈0.80/0.18 favoring V7 and scored 0.7991 LB (0.002 worse than 60/40); (b) constrained tilt stacker (±0.15 band around 60/40) had all 5 weeks hit the +0.15 cap, indicating uniformly V7-favoring tilts with no per-week structure to exploit. **Hand-tuned weights anchored to LB feedback outperformed any data-driven weight learned from val.** This is a direct consequence of the local-Kaggle gap (Finding 4) — the test era's distribution shift differs from even the most-recent training era, so val cannot serve as a proxy for test in ensemble optimization.
+   - **V8/V8.1 (RNN, P-sLSTM):** underprediction bias — per-week prediction means
+     ~0.75 versus V7's ~1.05. A 5-seed average left the bias unchanged.
+   - **V9 (attention, iTransformer):** collapsed to near-constant predictions ~0.6
+     (correlation ~0.18 with other models — bias, not orthogonal signal).
+   - **DLinear (linear decomposition):** per-week prediction means decayed
+     0.86 → 0.75 across the horizon (mean ~0.82), the same underprediction direction
+     as V8.1. Simple models on RevIN-normalized inputs against a 60%-zero target drift
+     toward the regional baseline as the forecast horizon grows.
 
-10. **Seed averaging benefits are architecture-specific and not monotonic.** For V7, the 5→10 seed jump cut ensemble LB by 0.0023 (0.7971 → 0.7948) — consistent with the 1/√N variance-reduction model and contradicting our May 13 working assumption of a plateau. For V10, the same 5→10 jump *hurt* the ensemble by 0.0017 (0.7948 → 0.7965 at the same weights). A V7-heavy weight tilt (0.65 / 0.20) couldn't recover the regression, confirming V10-10seed itself is the issue, not the weight balance. **Interpretation:** V10's value in the ensemble lives in the variance V10-5seed leaves behind. The diversifier's complementary signal is partly encoded in seed-to-seed disagreement; smoothing it away with more seeds makes V10 redundant with V7. This is the inverse of V7's behavior, where the dominant model benefits from maximal smoothing. **Asymmetric seed counts (10 for the main model, 5 for the diversifier) is the right pattern here.**
+   The TCN family is the only one that works: enough capacity to learn that drought
+   scores are a signal layered on top of the weather distribution rather than a
+   zero-mean residual of it, plus a locality/translation-equivariance prior suited to
+   a 91-day window.
 
-11. **Weight tuning matters even with high model correlation.** A three-day weight sweep on the (V5, V7-10seed, V10-5seed) ensemble moved LB from 0.7948 → 0.7942 across four submissions. The optimum shifted from the original (0.15/0.55/0.30) to (0.10/0.50/0.40) — meaningfully more weight on V10 and slightly less on V5. The directional signal was consistent (3 of 4 sweeps moved LB in the same direction) but per-slot gains shrank rapidly (0.0003 → 0.0001 → 0.0002), placing us firmly in diminishing-returns territory by the fourth sweep. **For models with 0.92 pairwise correlation, weight tuning still recovers ~0.001 LB but no more.**
+9. **Seed-averaging benefits are architecture-specific and non-monotonic.** For V7,
+   5 → 10 seeds *helped* the ensemble (−0.0023). For V10, the same 5 → 10 jump *hurt*
+   it (+0.0017), and a weight tilt could not recover the loss. V10's value lives in
+   the seed-to-seed variance that V10-5seed leaves behind; smoothing it away makes V10
+   redundant with V7. **Asymmetric seed counts — 10 for the main model, 5 for the
+   diversifier — is the right pattern.**
 
-12. **Best LB 0.7942 — 0.0114 above Baseline 3.** Final picks (Kaggle auto-selection of top two public): (0.10/0.50/0.40) at 0.7942 and (0.15/0.45/0.40) at 0.7944. Both share the same architectural shape (V5 + V7-10seed + V10-5seed) and differ only in V5/V7 weight split, giving robust private-LB safety. Stacking via val predictions is closed off (Finding 9); V8/V9 architecture path is closed off (Finding 8); V10-10seed path is closed off (Finding 10). Further LB gain would require fundamentally new orthogonal signal not present in any trained model.
+10. **A model's marginal value is context-dependent.** Dropping V5 from an early
+    ensemble cost ~0.0002 LB (apparently redundant); dropping it from the final
+    ensemble cost 0.0019 LB. Once the TCN components are smoothed by heavy seed
+    averaging, V5's tree-based predictions become the only genuinely orthogonal signal
+    left. "Is V5 redundant?" has no fixed answer — it depends on the rest of the blend.
+
+11. **Weight tuning still pays, but only marginally, at high correlation.** A multi-day
+    weight sweep on the final ensemble (component correlation 0.92) moved LB from
+    0.7948 to 0.7942 across four submissions, with per-step gains shrinking to
+    0.0001–0.0002 — firmly in diminishing-returns territory.
 
 ---
 
-## Pairwise Model Correlation (Average Across 5 Weeks)
+## Failed Experiments
+
+Each entry is a hypothesis that did not work out, kept here because the negative
+result is itself informative.
+
+| # | Experiment | What happened | Lesson |
+|---|---|---|---|
+| 1 | V1.5 monthly median | LB 1.03 — over-confident on chronic-drought regions | MAE-optimal median applies to single constants, not conditional predictions on small groups |
+| 2 | V4 in-window score features | Val 0.20, LB 1.20 | Features must be computable identically at train and inference time; `test.csv` has no score column |
+| 3 | V3 quantile calibration | LB 0.917 → 0.967 | Distribution mismatch was a symptom; ranking quality was the real bottleneck |
+| 4 | V8/V9 sequence architectures | All underperformed TCN by 0.25+ val MAE | Channel-independent architectures fail on correlated features; a 91-day window is too short for attention to beat dilated convolution |
+| 5 | V7-large / V7.1 | More capacity *and* more regularization both hurt | V7's 64ch × 5 blocks is a structural sweet spot |
+| 6 | V6 feature stacking + V3/V5/V6 ensemble | Correlation 0.978; ensemble gained nothing | Ensemble diversity needs different inductive biases, not more features |
+| 7 | V10 single-seed | Converged in 2 epochs; static features dominated | The TCN backbone contributed little extra signal without seed averaging |
+| 8 | Ridge / tilt stacking | Val-fit weights lost 0.002 LB to hand-tuned weights | Validation/LB inversion makes any val-fit weight unreliable |
+| 9 | V10-10seed | 5 → 10 seeds *hurt* the ensemble by 0.0017 | The diversifier needs its seed variance; asymmetric seed counts are correct |
+| 10 | DLinear | Phase-1 sanity check: val 0.643, prediction means decaying to 0.75 | A pre-registered stop criterion (means < 0.90 → abort) closed the path before a full run; the same bias as V8.1 |
+
+---
+
+## Model Correlation
+
+Pairwise prediction correlation, averaged across the five weekly horizons:
 
 | Pair | Correlation | Interpretation |
 |---|---|---|
-| V5 ↔ V7-single | 0.77 | Moderate — cross-architecture diversity |
-| V5 ↔ V7-5seed | 0.77 | Stable across seed averaging |
-| V5 ↔ V10-5seed | 0.78 | V5 ≈ V7 ≈ V10 in pairwise distance — V5 redundant once V10 present |
-| V7-single ↔ V10-single | 0.88 | High — V10 mostly mimics V7 |
-| **V7-5seed ↔ V10-5seed** | **0.92** | Very high — V10-5seed largely a static-feature-augmented V7 |
-| V8 ↔ V7-5seed | 0.47 | Genuinely different signal, but V8 val MAE 0.71 = mostly noise |
-| V8 ↔ V10-5seed | 0.44 | Same story; V8 disagrees but is too inaccurate to help |
-| V9 ↔ V7-5seed | 0.19 | **Broken** — V9 means 0.6 vs others 1.0; bias not signal |
-| V9 ↔ V10-5seed | 0.16 | **Broken** — same diagnosis |
+| V5 ↔ V7 | 0.77 | moderate — useful cross-architecture diversity |
+| V5 ↔ V10-5seed | 0.78 | V5 remains the most distinct available model |
+| V7-5seed ↔ V10-5seed | 0.92 | very high — V10 is largely a static-augmented V7 |
+| V8 ↔ V7-5seed | 0.47 | genuinely different, but V8 is mostly noise (val 0.71) |
+| V9 ↔ V7-5seed | 0.19 | broken — V9 predicts ~0.6, this is bias not signal |
 
-**Insight:** Seed averaging strips out seed-specific noise; what remains is true model agreement, which is high for similar architectures. V5 is the most distinct *available* model and remains genuinely orthogonal to the TCN-based components, though its marginal value in the ensemble depends on how much pseudo-diversity the TCN seed variance is contributing (Finding 7). V8 and V9 reach genuinely different prediction regions but for the wrong reason (noise and bias respectively), not because they encode useful complementary structure (Finding 8).
+Seed averaging strips seed-specific noise, leaving true model agreement — which is
+high among similar architectures. V8 and V9 reach genuinely different prediction
+regions, but for the wrong reasons (noise and bias), not because they encode useful
+complementary structure.
+
+---
+
+## Repository Structure
+
+```
+.
+├── data_pipeline_nn.py              # shared data prep for all neural models
+├── baseline_v1_monthly_mean.py      # V1   — monthly-mean lookup
+├── baseline_v2_lgbm_minimal.py      # V2   — minimal LightGBM
+├── baseline_v3_lgbm_features.py     # V3   — engineered-feature LightGBM
+├── baseline_v5_lgbm_score_history.py# V5   — best tree model
+├── baseline_v6_lgbm_recent_drought.py# V6
+├── baseline_v7_tcn.py               # V7   — TCN
+├── baseline_v7_tcn_5seed_avg.py     # V7   — multi-seed TCN trainer
+├── baseline_v8_pslstm.py            # V8   — P-sLSTM
+├── baseline_v9_itransformer.py      # V9   — iTransformer
+├── baseline_v10_tcn_static.py       # V10  — TCN + static features
+├── run_v10_5seeds.py                # V10  — multi-seed trainer
+├── baseline_dlinear_5seed_avg.py    # DLinear — multi-seed trainer
+├── ensemble_*.py                    # ensemble blending scripts
+└── README.md
+```
+
+The multi-seed trainers (`*_5seed_avg.py`, `run_v10_5seeds.py`) take a configurable
+comma-separated seed list, so the same script produces a single-seed sanity check, a
+5-seed average, or a 10-seed average.
 
 ---
 
-## File Inventory
+## Reproducing
 
-### Submission scripts (training)
-- `baseline_v1_monthly_mean.py` — V1
-- `baseline_v1_5_monthly_median.py` — V1.5
-- `calibrate_v3.py` — V3 calibration step
-- `baseline_v2_lgbm_minimal.py` — V2
-- `baseline_v3_lgbm_features.py` — V3
-- `baseline_v5_lgbm_score_history.py` — V5 ⭐
-- `baseline_v6_lgbm_recent_drought.py` — V6
-- `baseline_v7_tcn.py` — V7 ⭐
-- `baseline_v7_1_tcn_reg.py` — V7.1
-- `baseline_v7_large_tcn.py` — V7-large
-- `baseline_v8_pslstm.py` — V8 P-sLSTM
-- `baseline_v8_1_pslstm_mh.py` — V8.1 multi-head P-sLSTM
-- `baseline_v9_itransformer.py` — V9
-- `baseline_v10_tcn_static.py` — V10 (single seed)
-- `run_v10_5seeds.py` — V10 5-seed runner ⭐⭐
+All neural models share the data pipeline and a common training interface. Example —
+training the 10-seed TCN that anchors the best ensemble:
 
-### Shared utilities
-- `data_pipeline_nn.py` — data prep for all NN models
+```bash
+python baseline_v7_tcn_5seed_avg.py \
+    --base /path/to/data-mining-2026-final-project \
+    --seeds 42,43,44,45,46,47,48,49,50,51 \
+    --out baseline_v7_tcn_10seed_avg.csv
+```
 
-### Ensemble scripts
-- `ensemble_v3v5v6.py` — V3+V5+V6 (submitted, LB 0.9035)
-- `ensemble_v5_v7.py` — V5+V7 single (submitted, LB 0.8353)
-- `ensemble_v5_v7_5seed.py` — V5+V7-5seed
-- `ensemble_v5_v7_5seed_v10.py` — V5+V7-5seed+V10 (3-way) ⭐
+A single-seed sanity check before committing to a full run:
 
-### Submission CSVs in Drive
-- `baseline_v5_lgbm_score_history.csv` (LB 0.9017)
-- `baseline_v7_tcn.csv` (LB 0.8463)
-- `baseline_v7_5seed_avg.csv` (LB 0.8071) ⭐⭐
-- `baseline_v10_5seed_avg.csv` (LB 0.8159) ⭐
-- `ensemble_v5v7_mean.csv` (LB 0.8353)
-- `ensemble_v5_v7_5seed_v7stronger.csv` (untested)
-- `ensemble_3way_v7stronger.csv` (LB 0.7971) ⭐⭐ best
-- `ensemble_3way_mean.csv`, `ensemble_3way_nov5.csv`, etc. (variants)
+```bash
+python baseline_dlinear_5seed_avg.py --seeds 42 --out dlinear_seed42.csv
+```
+
+Ensemble blends are produced by the `ensemble_*.py` scripts, which read the per-model
+submission CSVs and combine them at the chosen weights.
 
 ---
+
+## References
+
+The architectures explored draw on the following work; full bibliographic details are
+in the project report.
+
+- **TCN** — Bai et al., *An Empirical Evaluation of Generic Convolutional and Recurrent
+  Networks for Sequence Modeling*, 2018.
+- **RevIN** — Kim et al., *Reversible Instance Normalization for Accurate Time-Series
+  Forecasting against Distribution Shift*, ICLR 2022.
+- **DLinear** — Zeng et al., *Are Transformers Effective for Time Series Forecasting?*,
+  AAAI 2023.
+- **iTransformer** — Liu et al., *iTransformer: Inverted Transformers Are Effective for
+  Time Series Forecasting*, ICLR 2024.
+- **P-sLSTM** — Kong et al., *Unlocking the Power of LSTM for Long-Term Time Series
+  Forecasting*, 2025.
