@@ -171,7 +171,7 @@ complementary structure.
 ├── baseline_v8_pslstm.py            # V8   — P-sLSTM
 ├── baseline_v9_itransformer.py      # V9   — iTransformer
 ├── baseline_v10_tcn_static.py       # V10  — TCN + static features
-├── run_v10_5seeds.py                # V10  — multi-seed trainer
+├── baseline_v10_tcn_static_5seed_avg.py # V10  — multi-seed trainer
 ├── baseline_dlinear_5seed_avg.py    # DLinear — multi-seed trainer
 ├── ensemble_*.py                    # ensemble blending scripts
 └── README.md
