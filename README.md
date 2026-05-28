@@ -173,6 +173,8 @@ complementary structure.
 ├── baseline_v10_tcn_static.py       # V10  — TCN + static features
 ├── baseline_v10_tcn_static_5seed_avg.py# V10  — multi-seed trainer
 ├── baseline_dlinear_5seed_avg.py    # DLinear — multi-seed trainer
+├── baseline_v11_informer            # Informer
+├── baseline_v11_informer_5seed_avg  # Informer - multi-seed trainer
 ├── ensemble/                        # ensemble blending scripts
 ├── FinalProject.ipynb               # For experiment reproducing
 └── README.md
@@ -214,6 +216,8 @@ in the project report.
 
 - **TCN** — Bai et al., *An Empirical Evaluation of Generic Convolutional and Recurrent
   Networks for Sequence Modeling*, 2018.
+- **Informer** - Zhou et al., *Beyond Efficient Transformer for Long Sequence Time-Series
+  Forecasting*, AAAI 2021.
 - **RevIN** — Kim et al., *Reversible Instance Normalization for Accurate Time-Series
   Forecasting against Distribution Shift*, ICLR 2022.
 - **DLinear** — Zeng et al., *Are Transformers Effective for Time Series Forecasting?*,
@@ -222,3 +226,4 @@ in the project report.
   Time Series Forecasting*, ICLR 2024.
 - **P-sLSTM** — Kong et al., *Unlocking the Power of LSTM for Long-Term Time Series
   Forecasting*, 2025.
+
